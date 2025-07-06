@@ -1,0 +1,289 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Absensi Karyawan</title>
+  <style>
+    body {
+      font-family: 'Poppins', sans-serif;
+      background: linear-gradient(to bottom right, #e0f7ff, #f0faff);
+      margin: 0;
+      padding: 0;
+      color: #005577;
+      text-align: center;
+    }
+
+    h1 {
+      margin-top: 30px;
+      font-size: 2.5em;
+      color: #0077aa;
+    }
+
+    .button-group {
+      margin: 20px 0;
+      display: flex;
+      justify-content: center;
+      flex-wrap: wrap;
+      gap: 10px;
+    }
+
+    button {
+      background: linear-gradient(45deg, #89d6f0, #4ab0db);
+      color: white;
+      padding: 12px 22px;
+      border: none;
+      border-radius: 10px;
+      font-size: 14px;
+      font-weight: 600;
+      cursor: pointer;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+      transition: 0.3s ease;
+    }
+
+    button:hover {
+      background: linear-gradient(45deg, #4ab0db, #309abe);
+    }
+
+    video {
+      border-radius: 15px;
+      width: 100%;
+      max-width: 400px;
+      aspect-ratio: 4 / 3;
+      object-fit: cover;
+      margin-top: 20px;
+      box-shadow: 0 4px 20px rgba(0, 0, 0, 0.1);
+    }
+
+    #result, #debug, #student-info, #location, #tanggal {
+      margin-top: 20px;
+      font-size: 1.1em;
+      padding: 15px;
+      background: #e6f9ff;
+      border-radius: 10px;
+      width: 90%;
+      max-width: 500px;
+      margin-left: auto;
+      margin-right: auto;
+      box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+    }
+
+    canvas {
+      display: none;
+    }
+
+    .loader {
+      border: 4px solid #f3f3f3;
+      border-top: 4px solid #4ab0db;
+      border-radius: 50%;
+      width: 30px;
+      height: 30px;
+      animation: spin 1s linear infinite;
+      margin: 10px auto;
+      display: none;
+    }
+
+    #captured-image {
+      display: none;
+    }
+
+    @keyframes spin {
+      0% { transform: rotate(0deg); }
+      100% { transform: rotate(360deg); }
+    }
+
+    @media (max-width: 600px) {
+      button {
+        width: 90%;
+      }
+      h1 {
+        font-size: 2em;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <h1>🎓 Absensi Karyawan</h1>
+
+  <div class="button-group">
+    <button id="start-button">Aktifkan Kamera</button>
+    <button id="capture-button" disabled>📸 Ambil Gambar</button>
+    <button id="stop-button">Matikan Kamera</button>
+    <button id="download-pdf">Unduh PDF</button>
+  </div>
+
+  <div class="loader" id="loading-spinner"></div>
+  <video id="webcam" autoplay playsinline></video>
+  <canvas id="canvas" width="224" height="224"></canvas>
+  <img id="captured-image" />
+
+  <div id="result">Status: Menunggu deteksi...</div>
+  <div id="debug">📡 Model belum dimuat...</div>
+  <div id="student-info"></div>
+  <div id="location"></div>
+  <div id="tanggal"></div>
+
+  <audio id="alarm-sound" src="https://actions.google.com/sounds/v1/alarms/beep_short.ogg" preload="auto"></audio>
+
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.20.0/dist/tf.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@0.8.4/dist/teachablemachine-image.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script>
+    const URL = "https://teachablemachine.withgoogle.com/models/7EjHvjBPJY/";
+    let model = null;
+    let webcamStream = null;
+    let isAlarmPlaying = false;
+
+    const webcam = document.getElementById("webcam");
+    const canvas = document.getElementById("canvas");
+    const ctx = canvas.getContext("2d");
+
+    const startBtn = document.getElementById("start-button");
+    const captureBtn = document.getElementById("capture-button");
+    const stopBtn = document.getElementById("stop-button");
+    const downloadBtn = document.getElementById("download-pdf");
+
+    const resultDiv = document.getElementById("result");
+    const debugDiv = document.getElementById("debug");
+    const studentInfoDiv = document.getElementById("student-info");
+    const locationDiv = document.getElementById("location");
+    const tanggalDiv = document.getElementById("tanggal");
+    const alarm = document.getElementById("alarm-sound");
+    const loadingSpinner = document.getElementById("loading-spinner");
+    const capturedImg = document.getElementById("captured-image");
+
+    const studentDatabase = {
+      "Rahmatul Hidayah": { name: "Rahmatul Hidayah", age: 23 },
+      "Gema Restu KomalaSari": { name: "Gema Restu KomalaSari", age: 21 }
+    };
+
+    async function loadModel() {
+      try {
+        loadingSpinner.style.display = "block";
+        model = await tmImage.load(URL + "model.json", URL + "metadata.json");
+        debugDiv.textContent = "✅ Model berhasil dimuat.";
+        captureBtn.disabled = false;
+      } catch (e) {
+        debugDiv.textContent = "❌ Gagal memuat model.";
+        console.error(e);
+      } finally {
+        loadingSpinner.style.display = "none";
+      }
+    }
+
+    async function startWebcam() {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        webcam.srcObject = stream;
+        webcamStream = stream;
+        resultDiv.textContent = "✅ Kamera aktif.";
+        await loadModel();
+        getLocation();
+        showDate();
+      } catch (e) {
+        resultDiv.textContent = "⚠️ Tidak dapat mengakses kamera.";
+        console.error(e);
+      }
+    }
+
+    function stopWebcam() {
+      if (webcamStream) {
+        webcamStream.getTracks().forEach(track => track.stop());
+        webcam.srcObject = null;
+        webcamStream = null;
+        resultDiv.textContent = "⛔ Kamera dimatikan.";
+        debugDiv.textContent = "🔝 Deteksi dihentikan.";
+        captureBtn.disabled = true;
+      }
+    }
+
+    async function predictImage() {
+      if (!model || !webcamStream) {
+        resultDiv.textContent = "⚠️ Kamera atau model belum siap.";
+        return;
+      }
+
+      ctx.drawImage(webcam, 0, 0, 224, 224);
+      const imageData = canvas.toDataURL("image/png");
+      capturedImg.src = imageData;
+      capturedImg.style.display = "block";
+
+      const predictions = await model.predict(canvas);
+
+      debugDiv.innerHTML = predictions.map(p =>
+        `${p.className}: ${(p.probability * 100).toFixed(1)}%`
+      ).join("<br>");
+
+      const top = predictions.sort((a, b) => b.probability - a.probability)[0];
+      const label = top.className;
+      const confidence = (top.probability * 100).toFixed(1);
+
+      if (top.probability > 0.7 && studentDatabase[label]) {
+        resultDiv.textContent = `🟢 ${label} Hadir (${confidence}%)`;
+        showStudentInfo(label);
+        if (!isAlarmPlaying) {
+          alarm.play();
+          isAlarmPlaying = true;
+          setTimeout(() => isAlarmPlaying = false, 2000);
+        }
+      } else {
+        resultDiv.textContent = `❓ Tidak yakin (${confidence}%)`;
+        studentInfoDiv.innerHTML = "";
+      }
+    }
+
+    function showStudentInfo(label) {
+      const info = studentDatabase[label];
+      if (info) {
+        studentInfoDiv.innerHTML = `
+          <strong>Data Karyawan</strong><br>
+          Nama: ${info.name}<br>
+          Umur: ${info.age} tahun
+        `;
+      } else {
+        studentInfoDiv.innerHTML = `❌ Data tidak ditemukan untuk <strong>${label}</strong>`;
+      }
+    }
+
+    function getLocation() {
+      if (navigator.geolocation) {
+        navigator.geolocation.getCurrentPosition(position => {
+          locationDiv.innerHTML = `📍 Lokasi: ${position.coords.latitude.toFixed(5)}, ${position.coords.longitude.toFixed(5)}`;
+        }, () => {
+          locationDiv.innerHTML = `⚠️ Gagal mengambil lokasi.`;
+        });
+      } else {
+        locationDiv.innerHTML = `❌ Geolokasi tidak didukung.`;
+      }
+    }
+
+    function showDate() {
+      const now = new Date();
+      const options = { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' };
+      tanggalDiv.innerHTML = `🕒 Tanggal: ${now.toLocaleDateString('id-ID', options)}`;
+    }
+
+    function downloadPDF() {
+      const { jsPDF } = window.jspdf;
+      const doc = new jsPDF();
+      doc.text("Data Absensi Karyawan", 20, 20);
+      doc.text(resultDiv.textContent, 20, 30);
+      doc.text(studentInfoDiv.innerText, 20, 40);
+      doc.text(locationDiv.textContent, 20, 70);
+      doc.text(tanggalDiv.textContent, 20, 80);
+
+      if (capturedImg.src) {
+        doc.addImage(capturedImg.src, "PNG", 20, 90, 80, 60);
+      }
+
+      doc.save("absensi.pdf");
+    }
+
+    startBtn.addEventListener("click", startWebcam);
+    stopBtn.addEventListener("click", stopWebcam);
+    captureBtn.addEventListener("click", predictImage);
+    downloadBtn.addEventListener("click", downloadPDF);
+  </script>
+</body>
+</html>
